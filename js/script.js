@@ -1,8 +1,6 @@
-const apodData =
-  "https://cdn.jsdelivr.net/gh/GCA-Classroom/apod/data.json";
-
 const gallery = document.getElementById("gallery");
 const button = document.getElementById("getImageBtn");
+const API_KEY = "QkpMDGFch7ddLwfg7Jp9MfJzRkCwDrmrwbnnCKLM";
 
 const modal = document.getElementById("imageModal");
 const modalImage = document.getElementById("modalImage");
@@ -49,6 +47,11 @@ async function loadImages() {
     return;
   }
 
+  if (startDate > endDate) {
+    alert("The start date must be before the end date.");
+    return;
+  }
+
   gallery.innerHTML = `
     <div class="placeholder">
       <div class="placeholder-icon">🔄</div>
@@ -57,25 +60,59 @@ async function loadImages() {
   `;
 
   try {
-    const response = await fetch(apodData);
-    const data = await response.json();
+    // Send the selected dates to NASA's Astronomy Picture of the Day API.
+    const apiUrl =
+      `https://api.nasa.gov/planetary/apod?api_key=${API_KEY}` +
+      `&start_date=${startDate}&end_date=${endDate}`;
 
-    const filteredData = data.filter(item => {
-      return item.date >= startDate &&
-             item.date <= endDate;
+    const response = await fetch(apiUrl);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = `NASA request failed (${response.status})`;
+
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.msg || errorMessage;
+      } catch {
+        // NASA may return plain text during a temporary service failure.
+      }
+
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    const usableData = data.filter(item => {
+      return item.media_type !== "image" || !isNasaPlaceholder(item);
     });
 
-    displayGallery(filteredData);
+    // NASA sent entries, but every one was a placeholder logo
+    if (data.length > 0 && usableData.length === 0) {
+      showApiProblem(data[0].url);
+      return;
+    }
+
+    displayGallery(usableData);
 
   } catch (error) {
     gallery.innerHTML = `
       <div class="placeholder">
-        <p>Error loading data.</p>
+        <p>${error.message}</p>
+        <p>Please try again in a moment.</p>
       </div>
     `;
 
     console.error(error);
   }
+}
+
+function showApiProblem(logoUrl) {
+  gallery.innerHTML = `
+    <div class="placeholder">
+      <img src="${logoUrl}" alt="NASA logo" style="width: 120px; margin-bottom: 16px;">
+      <p>NASA API not currently providing images.</p>
+    </div>
+  `;
 }
 
 function displayGallery(images) {
@@ -84,7 +121,8 @@ function displayGallery(images) {
   if (images.length === 0) {
     gallery.innerHTML = `
       <div class="placeholder">
-        <p>No images found for selected dates.</p>
+        <p>NASA returned no usable images for these dates.</p>
+        <p>Try a different date range.</p>
       </div>
     `;
     return;
@@ -103,10 +141,22 @@ function displayGallery(images) {
         <p>${item.date}</p>
       `;
 
+      const image = card.querySelector("img");
+
+      image.addEventListener("error", () => {
+        if (image.src !== item.url) {
+          image.src = item.url;
+        } else {
+          image.replaceWith(createUnavailableImage(item));
+        }
+      });
+
     } else {
 
       card.innerHTML = `
-        <div class="placeholder-icon">🎥</div>
+        ${item.thumbnail_url
+          ? `<img src="${item.thumbnail_url}" alt="${item.title}">`
+          : `<div class="placeholder-icon">🎥</div>`}
         <p><strong>${item.title}</strong></p>
         <p>${item.date}</p>
         <a href="${item.url}" target="_blank">
@@ -132,12 +182,24 @@ function openModal(item) {
 
     modalImage.style.display = "block";
     modalImage.src = item.hdurl || item.url;
+    modalImage.onerror = () => {
+      if (modalImage.src !== item.url) {
+        modalImage.src = item.url;
+      } else {
+        modalImage.style.display = "none";
+        modalExplanation.insertAdjacentHTML(
+          "afterbegin",
+          `<p class="image-unavailable">Image unavailable. <a href="${item.url}" target="_blank" rel="noopener">Open source link</a></p>`
+        );
+      }
+    };
 
     modalExplanation.innerHTML = item.explanation;
 
   } else {
 
     modalImage.style.display = "none";
+    modalImage.onerror = null;
 
     modalExplanation.innerHTML = `
       ${item.explanation}
@@ -150,6 +212,19 @@ function openModal(item) {
   }
 
   modal.style.display = "block";
+}
+
+function createUnavailableImage(item) {
+  const message = document.createElement("p");
+  message.classList.add("image-unavailable");
+  message.textContent = "Image unavailable";
+  message.title = item.url;
+  return message;
+}
+
+function isNasaPlaceholder(item) {
+  const imageUrl = (item.hdurl || item.url || "").toLowerCase();
+  return imageUrl.includes("nasa-logo") || item.title === "NASA Science";
 }
 
 closeBtn.addEventListener("click", () => {
